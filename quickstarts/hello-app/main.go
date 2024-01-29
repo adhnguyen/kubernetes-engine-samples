@@ -23,15 +23,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/gorilla/mux"
 )
 
 type WeatherRequest struct {
-	Lat    float64 `json:"lat"`
-	Lon    float64 `json:"lon"`
-	ApiKey string  `json:"apiKey"`
+	Location string `string:"location"`
+	ApiKey   string `json:"apiKey"`
 }
 
 func main() {
@@ -77,12 +77,44 @@ func weather(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lat := requestData.Lat
-	lon := requestData.Lon
+	var (
+		lat float64
+		lon float64
+	)
+
+	location := requestData.Location
 	apiKey := requestData.ApiKey
 
-	response, err := http.Get(fmt.Sprintf(
-		"https://api.openweathermap.org/data/2.5/weather?lat=%f&lon=%f&appid=%s",
+	// Retrieve lat, lon for location
+	location = url.QueryEscape(location)
+	urlString := fmt.Sprintf("https://api.openweathermap.org/geo/1.0/direct?q=%s&limit=1&appid=%s", location, apiKey)
+	target, err := url.Parse(urlString)
+	if err != nil {
+		fmt.Fprintf(w, `{"error": "Failed to parse URL: %s"}`, err)
+		return
+	}
+
+	response, err := http.Get(target.String())
+	if err != nil {
+		message := fmt.Sprintf("Failed to call API: %s", err)
+		fmt.Fprintf(w, `{"error": "%s"}`, message)
+		return
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != 200 {
+		message := "Failed to call API."
+		fmt.Fprintf(w, `{"error": "%s"}`, message)
+		return
+	}
+	var responseList []interface{}
+	json.NewDecoder(response.Body).Decode(&responseList)
+
+	lat = responseList[0].(map[string]interface{})["lat"].(float64)
+	lon = responseList[0].(map[string]interface{})["lon"].(float64)
+
+	response, err = http.Get(fmt.Sprintf(
+		"https://api.openweathermap.org/data/2.5/weather?lat=%f&lon=%f&appid=%s&units=metric",
 		lat, lon, apiKey))
 
 	if err != nil {
@@ -103,14 +135,19 @@ func weather(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"error": "%s"}`, message)
 		return
 	}
-
 	summary := responseJson["weather"].([]interface{})[0].(map[string]interface{})["description"].(string)
+	temp_min := responseJson["main"].(map[string]interface{})["temp_min"].(float64)
+	temp_max := responseJson["main"].(map[string]interface{})["temp_max"].(float64)
 
 	// Return JSON response
 	jsonResponse := map[string]interface{}{
 		"sessionInfo": map[string]interface{}{
 			"parameters": map[string]interface{}{
-				"summary": summary,
+				"summary":  summary,
+				"temp_min": temp_min,
+				"temp_max": temp_max,
+				"lat":      lat,
+				"lon":      lon,
 			},
 		},
 	}
